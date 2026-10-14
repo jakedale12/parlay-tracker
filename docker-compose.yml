@@ -1,0 +1,24 @@
+services:
+  parlay-tracker:
+    build: .
+    container_name: parlay-tracker
+    restart: unless-stopped
+    environment:
+      - TZ=America/Toronto
+      - PARLAY_DATA=/data
+      - PARLAY_NTFY_SERVER=http://localhost:2586
+      - PARLAY_NTFY_TOPIC=parlay-alerts
+      - PARLAY_PORT=8796
+      - PARLAY_POLL_SECONDS=900
+    volumes:
+      - parlay_data:/data
+    ports:
+      - "8796:8796"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  parlay_data:
