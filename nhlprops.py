@@ -13,6 +13,8 @@ import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import netutil
+
 BASE = "https://api-web.nhle.com/v1"
 ET = ZoneInfo("America/Toronto")
 
@@ -47,7 +49,7 @@ def _get(path):
         return _cache[path]
     req = urllib.request.Request(BASE + path,
                                  headers={"User-Agent": "parlay-tracker/1.0"})
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with netutil.open_url(req, timeout=25) as r:
         data = json.load(r)
     _cache[path] = data
     return data
