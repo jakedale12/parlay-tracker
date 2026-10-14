@@ -18,11 +18,12 @@ import urllib.request
 
 import config
 import db as dbmod
+import netutil
 
 
 def fetch_text(url, timeout=30):
     req = urllib.request.Request(url, headers={"User-Agent": config.USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with netutil.open_url(req, timeout=timeout) as r:
         return r.status, r.read().decode("utf-8", "replace")
 
 
