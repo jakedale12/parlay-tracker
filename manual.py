@@ -34,7 +34,14 @@ def parse_manual(text):
     for part in text.split("|")[1:]:
         if "=" in part:
             k, v = part.split("=", 1)
-            fields[k.strip().lower()] = v.strip()
+            k = k.strip().lower()
+            if k in fields:
+                # Duplicate key: the FIRST occurrence wins. A repeated key
+                # means the line was spliced (e.g. an injected "| capper=..."
+                # tail), so ignore the duplicate and everything after it —
+                # later segments are untrusted.
+                break
+            fields[k] = v.strip()
     for req in ("capper", "sport", "market"):
         if req not in fields:
             raise ValueError(f"missing required field: {req}")
