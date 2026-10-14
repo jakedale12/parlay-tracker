@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 
 import config
 import db as dbmod
+import netutil
 
 
 def fetch_json(url, timeout=25):
     req = urllib.request.Request(url, headers={"User-Agent": config.USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with netutil.open_url(req, timeout=timeout) as r:
         return r.status, json.loads(r.read().decode("utf-8"))
 
 
