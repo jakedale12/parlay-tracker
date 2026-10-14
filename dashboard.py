@@ -11,8 +11,10 @@ Order (Jake's Stage 5 spec):
 One write path exists: the 'Log my pick' form (POST /log-pick) files Jake's
 own pick through the same manual parser + timestamp rule as every source.
 The system NEVER places a bet."""
+import hmac
 import html
 import json
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -22,6 +24,26 @@ import records
 import settings as settings_mod
 
 ET = ZoneInfo("America/Toronto")
+
+LOGPICK_TOKEN_ENV = "PARLAY_LOGPICK_TOKEN"
+MAX_POST_BYTES = 65536
+_LOGPICK_SPORTS = ("NHL", "NFL")
+_LOGPICK_MARKETS = ("moneyline", "spread", "total", "prop")
+_FORBIDDEN_VALUE_CHARS = ("|", "=", "\n", "\r")
+
+
+def _logpick_token():
+    """Shared secret for POST /log-pick, from the environment ('' = unset)."""
+    return os.environ.get(LOGPICK_TOKEN_ENV, "").strip()
+
+
+def _clean_form_field(name, value):
+    """A form value must never be able to splice extra fields into the
+    manual-pick pipe format: reject |, = and newlines outright."""
+    v = (value or "").strip()
+    if any(c in v for c in _FORBIDDEN_VALUE_CHARS):
+        raise ValueError(f"{name} must not contain |, = or newlines")
+    return v
 
 COPY_JS = """
 function copySlip(id, btn){
@@ -87,8 +109,11 @@ CLAIMED_LABEL = "CLAIMED — unverified, does not count"
 
 
 def _log_pick_form():
-    return """<form method="post" action="/log-pick" class=logpick>
-<label>Sport <select name="sport"><option>NHL</option><option>NFL</option></select></label>
+    token = _logpick_token()
+    hidden = (f'<input type="hidden" name="t" value="{html.escape(token, quote=True)}">'
+              if token else "")
+    return f"""<form method="post" action="/log-pick" class=logpick>
+{hidden}<label>Sport <select name="sport"><option>NHL</option><option>NFL</option></select></label>
 <label>Market <select name="market"><option>moneyline</option><option>spread</option>
 <option>total</option></select></label>
 <label>Team <input name="team" placeholder="Toronto Maple Leafs" size="22"></label>
@@ -108,19 +133,38 @@ def handle_log_pick(conn, form):
     Returns the parser's (pick_id, status, event_id) tuple."""
     import espn
     import manual
+    # Validate/sanitize EVERY value before it is spliced into the pipe
+    # string — an unsanitized team/selection containing "|" or "=" could
+    # inject extra fields (capper=, source=) and file under another family.
     sport = (form.get("sport") or "NHL").strip().upper()
+    if sport not in _LOGPICK_SPORTS:
+        raise ValueError("sport must be NHL or NFL")
     market = (form.get("market") or "moneyline").strip().lower()
-    team = (form.get("team") or "").strip()
-    selection = (form.get("selection") or "").strip()
+    if market not in _LOGPICK_MARKETS:
+        raise ValueError("market must be moneyline, spread, total or prop")
+    team = _clean_form_field("team", form.get("team"))
+    selection = _clean_form_field("selection", form.get("selection"))
     if market != "total" and not team:
         raise ValueError("team is required for moneyline/spread picks")
+    line = (form.get("line") or "").strip()
+    if line:
+        try:
+            float(line)
+        except ValueError:
+            raise ValueError("line must be a number") from None
+    odds = (form.get("odds") or "").strip()
+    if odds:
+        try:
+            int(float(odds))
+        except ValueError:
+            raise ValueError("odds must be a whole number (e.g. -110)") from None
     parts = [f"capper=Jake", f"sport={sport}", f"market={market}"]
     if team:
         parts.append(f"team={team}")
-    if form.get("line"):
-        parts.append(f"line={form['line'].strip()}")
-    if form.get("odds"):
-        parts.append(f"odds={form['odds'].strip()}")
+    if line:
+        parts.append(f"line={line}")
+    if odds:
+        parts.append(f"odds={odds}")
     if selection:
         parts.append(f"selection={selection}")
     text = "PICK | " + " | ".join(parts)
@@ -350,7 +394,11 @@ lines — a baseline is not a pick and no capper gets credit or blame for it.</p
 
 
 def serve(conn_factory, port):
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    if not _logpick_token():
+        print(f"WARNING: {LOGPICK_TOKEN_ENV} is not set — POST /log-pick is "
+              "UNAUTHENTICATED (acceptable for local dev only).", flush=True)
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -370,9 +418,28 @@ def serve(conn_factory, port):
             if self.path != "/log-pick":
                 self.send_response(404); self.end_headers(); return
             from urllib.parse import parse_qs
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0:
+                self.send_response(400); self.end_headers()
+                self.wfile.write(b"Bad Content-Length.")
+                return
+            if length > MAX_POST_BYTES:
+                self.send_response(413); self.end_headers()
+                self.wfile.write(b"Request body too large.")
+                return
             form = {k: v[0] for k, v in parse_qs(
                 self.rfile.read(length).decode("utf-8", "replace")).items()}
+            token = _logpick_token()
+            if token and not hmac.compare_digest(
+                    form.get("t", "").encode("utf-8"), token.encode("utf-8")):
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"Forbidden: missing or incorrect form token.")
+                return
             try:
                 conn = conn_factory()
                 pid, status, _eid = handle_log_pick(conn, form)
@@ -394,4 +461,4 @@ def serve(conn_factory, port):
         def log_message(self, *a):
             pass
 
-    HTTPServer(("0.0.0.0", port), H).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
