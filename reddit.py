@@ -19,6 +19,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
+import netutil
+
 UA = {"User-Agent": "parlay-tracker/1.0 (personal research; POTD RSS bridge; "
                    "single polite fetch per cycle)"}
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
@@ -29,7 +31,7 @@ LISTING_URL = "https://www.reddit.com/r/sportsbook/hot/.rss?limit=25"
 def _fetch(url):
     req = urllib.request.Request(url, headers=UA)
     try:
-        with urllib.request.urlopen(req, timeout=25) as r:
+        with netutil.open_url(req, timeout=25) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, ""
